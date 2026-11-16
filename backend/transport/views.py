@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 
-from .eta import fetch_google_leg_seconds
+from .eta import estimate_leg_seconds, fetch_google_leg_seconds
 from .models import AttendanceEvent
 from .permissions import is_conductor_of, routes_for
 from .serializers import AttendanceSerializer, RouteSerializer
@@ -54,7 +54,9 @@ def route_detail(request, pk):
 def start_trip(request, pk):
     route = own_route(request, pk)
     route.status = 'in_progress'
-    route.leg_seconds = fetch_google_leg_seconds(list(route.stops.all()))  # the one paid call per trip
+    stops = list(route.stops.all())
+    # The one paid call per trip; without Google, estimate from distance so ETAs still show.
+    route.leg_seconds = fetch_google_leg_seconds(stops) or estimate_leg_seconds(stops)
     route.save()
     for stop in route.stops.all():
         stop.students.update(status='not_boarded')  # fresh trip, everyone starts unboarded

@@ -11,7 +11,6 @@ const busIcon = L.divIcon({ className: 'bus-icon', html: '🚌', iconSize: [32, 
 export default function RouteView({ initial, role }) {
   const [route, setRoute] = useState(initial)
   const [etas, setEtas] = useState({})
-  const [etaSource, setEtaSource] = useState(null) // 'google' | 'straight_line'
   const socket = useRef(null)
 
   // Keep a WebSocket open and apply every message the server pushes. Phones lose signal,
@@ -25,7 +24,6 @@ export default function RouteView({ initial, role }) {
       if (msg.kind === 'location') {
         setRoute((r) => ({ ...r, current_latitude: msg.lat, current_longitude: msg.lng, location_updated_at: msg.at }))
         setEtas(msg.etas)
-        setEtaSource(msg.eta_source)
       } else if (msg.kind === 'status') {
         // Trip started or ended. The server reset some data (students back to "not boarded"),
         // so everyone watching reloads the route.
@@ -94,11 +92,6 @@ export default function RouteView({ initial, role }) {
 
       {role === 'conductor' && <ConductorPanel route={route} sendLocation={sendLocation} />}
 
-      {etaSource && route.status === 'in_progress' && (
-        <p className="muted">
-          ETA: {etaSource === 'google' ? 'Google Routes, live traffic' : 'straight-line estimate (no Google data)'}
-        </p>
-      )}
       <ol className="stops">
         {route.stops.map((s) => (
           <li key={s.id}>

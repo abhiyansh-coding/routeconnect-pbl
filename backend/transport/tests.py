@@ -12,7 +12,7 @@ from rest_framework.test import APIClient
 
 from routeconnect.asgi import application
 
-from .eta import fetch_google_leg_seconds, haversine_km, stop_etas
+from .eta import estimate_leg_seconds, fetch_google_leg_seconds, haversine_km, stop_etas
 from .models import AttendanceEvent, Route, Stop, Student
 
 
@@ -25,20 +25,24 @@ class EtaTests(TransactionTestCase):
     stops = [Stop(id=i, latitude=18.50 + i * 0.01, longitude=73.80, order=i) for i in range(1, 5)]
 
     def test_at_a_stop(self):
-        etas = stop_etas(18.52, 73.80, self.stops)  # sitting exactly on stop 2
-        self.assertEqual(etas, {1: None, 2: 0, 3: 3, 4: 7})
+        # Sitting exactly on stop 2; Google says each leg takes 10 minutes.
+        etas = stop_etas(18.52, 73.80, self.stops, leg_seconds=[600, 600, 600])
+        self.assertEqual(etas, {1: None, 2: 0, 3: 10, 4: 20})
 
     def test_just_left_a_stop_counts_it_as_passed(self):
         # 200 m past stop 2: stop 2 is still the nearest stop, but the bus is heading to stop 3.
-        etas = stop_etas(18.5218, 73.80, self.stops)
+        etas = stop_etas(18.5218, 73.80, self.stops, leg_seconds=[600, 600, 600])
         self.assertIsNone(etas[2])
         self.assertLess(etas[3], etas[4])
 
+    def test_estimate_without_google(self):
+        # Stops are ~1.11 km apart; at 20 km/h that's ~200 s per leg.
+        legs = estimate_leg_seconds(self.stops)
+        self.assertEqual(len(legs), 3)
+        self.assertAlmostEqual(legs[0], 200, delta=5)
 
-    def test_google_leg_times_are_used(self):
-        # Google says each leg takes 10 minutes (traffic), not ~3 at our average speed.
-        etas = stop_etas(18.52, 73.80, self.stops, leg_seconds=[600, 600, 600])
-        self.assertEqual(etas, {1: None, 2: 0, 3: 10, 4: 20})
+    def test_no_google_times_means_no_etas(self):
+        self.assertEqual(stop_etas(18.52, 73.80, self.stops, leg_seconds=None), {})
 
     @override_settings(GOOGLE_MAPS_API_KEY='test-key')
     def test_google_response_parsed(self):
@@ -52,7 +56,7 @@ class EtaTests(TransactionTestCase):
         self.assertEqual(len(json.loads(sent.data)['intermediates']), 2)
 
     @override_settings(GOOGLE_MAPS_API_KEY='test-key')
-    def test_google_failure_falls_back(self):
+    def test_google_failure_returns_none(self):
         with mock.patch('urllib.request.urlopen', side_effect=OSError('no internet')):
             self.assertIsNone(fetch_google_leg_seconds(self.stops))
 
@@ -112,6 +116,7 @@ class WebSocketTests(TransactionTestCase):
             msg = await parent.receive_json_from()
             self.assertEqual(msg['kind'], 'location')
             self.assertEqual(msg['lat'], 18.5236)
+            self.assertTrue(any(m is not None for m in msg['etas'].values()))  # estimated, no Google
 
             await parent.send_json_to({'lat': 0, 'lng': 0})  # parents can't move the bus
             self.assertTrue(await parent.receive_nothing())

@@ -120,7 +120,7 @@ Design choices worth knowing:
 | `transport/routing.py` | WebSocket URL → consumer (the WebSocket version of `urls.py`). |
 | `transport/eta.py` | Google Routes API call (once per trip) + Haversine + ETA maths. |
 | `transport/admin.py` | Registers models in Django's admin panel, which is the school admin's data-entry UI. |
-| `transport/tests.py` | 12 automated tests. |
+| `transport/tests.py` | 13 automated tests. |
 | `transport/management/commands/seed.py` | `python manage.py seed` creates demo data. |
 
 ### API endpoints
@@ -193,8 +193,7 @@ lower. Those times are saved in `Route.leg_seconds`.
 
 **Fallback.** No API key, no internet, bad key or quota exceeded → the call returns
 `None` and leg times are estimated from straight-line distance at 20 km/h instead. The
-app never breaks because Google is unavailable. The parent's screen shows which source
-is in use.
+app never breaks because Google is unavailable.
 
 **Limits:** leg times are fixed at trip start, so traffic that changes mid-trip isn't
 picked up. Production RouteConnect also saves the road shape Google returns, tracks the
@@ -222,16 +221,17 @@ bus along it, and makes a fresh paid call only when the ETA has drifted too far.
 
 ## 10. Testing
 
-`python manage.py test transport` runs 12 tests:
+`python manage.py test transport` runs 13 tests:
 
 | Test | Proves |
 |---|---|
 | `test_haversine_known_distance` | Pune → Mumbai ≈ 120 km |
 | `test_at_a_stop` | Exact ETA numbers when the bus is on a stop |
+| `test_estimate_without_google` | No Google → ~200 s per 1.1 km leg at 20 km/h |
 | `test_just_left_a_stop_counts_it_as_passed` | The "heading back" bug stays fixed |
-| `test_google_leg_times_are_used` | ETAs follow Google's leg times when present |
+| `test_no_google_times_means_no_etas` | `stop_etas` with no leg times returns nothing, no crash |
 | `test_google_response_parsed` | Request has the key + stops; `"312s"` parsed (network mocked) |
-| `test_google_failure_falls_back` | No internet → fallback, no crash |
+| `test_google_failure_returns_none` | No internet → `None` (then the estimate is used), no crash |
 | `test_no_key_means_no_call` | No key → Google never called |
 | `test_login_required` | No token → 401 |
 | `test_parent_sees_only_own_children` | Privacy filter works |

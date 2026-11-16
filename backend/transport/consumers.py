@@ -11,7 +11,7 @@ from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from django.utils import timezone
 from rest_framework.authtoken.models import Token
 
-from .eta import stop_etas
+from .eta import estimate_leg_seconds, stop_etas
 from .permissions import is_conductor_of, routes_for
 
 
@@ -31,7 +31,9 @@ def save_location(route, lat, lng):
     route.current_latitude, route.current_longitude = lat, lng
     route.location_updated_at = timezone.now()
     route.save(update_fields=['current_latitude', 'current_longitude', 'location_updated_at'])
-    return stop_etas(lat, lng, list(route.stops.all()), route.leg_seconds), route.location_updated_at.isoformat()
+    stops = list(route.stops.all())
+    legs = route.leg_seconds or estimate_leg_seconds(stops)  # trip started without Google data
+    return stop_etas(lat, lng, stops, legs), route.location_updated_at.isoformat()
 
 
 class RouteConsumer(AsyncJsonWebsocketConsumer):
@@ -66,8 +68,7 @@ class RouteConsumer(AsyncJsonWebsocketConsumer):
         etas, at = await save_location(self.route, lat, lng)
         await self.channel_layer.group_send(self.group, {
             'type': 'route.event',
-            'data': {'kind': 'location', 'lat': lat, 'lng': lng, 'at': at, 'etas': etas,
-                     'eta_source': 'google' if self.route.leg_seconds else 'straight_line'},
+            'data': {'kind': 'location', 'lat': lat, 'lng': lng, 'at': at, 'etas': etas},
         })
 
     async def route_event(self, event):

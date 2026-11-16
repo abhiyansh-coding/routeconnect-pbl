@@ -5,8 +5,7 @@ Google's Routes API knows real roads and traffic, but every call costs money. So
     (stop 1 -> stop 2, stop 2 -> stop 3, ...). We save those times on the route.
   - Every GPS update after that is FREE: we work out which leg the bus is on and how far
     along it is, and use Google's leg times for the rest.
-If there's no API key, or the call fails, legs are timed from straight-line distance at an
-average speed instead, so the app still works.
+If there's no API key, or the call fails, leg times are estimated from distance instead.
 """
 import json
 import logging
@@ -18,7 +17,7 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 EARTH_RADIUS_KM = 6371
-AVERAGE_BUS_SPEED_KMPH = 20  # fallback only; city traffic with stops
+AVERAGE_BUS_SPEED_KMH = 20  # typical city school bus incl. stops; used only without Google
 ROUTES_API_URL = 'https://routes.googleapis.com/directions/v2:computeRoutes'
 
 
@@ -58,33 +57,32 @@ def fetch_google_leg_seconds(stops):
         with urllib.request.urlopen(request, timeout=10) as response:
             legs = json.load(response)['routes'][0]['legs']
         seconds = [float(leg['duration'].rstrip('s')) for leg in legs]  # Google sends "312s"
-    except Exception as e:  # network down, bad key, quota, odd response: fall back, don't crash
-        logger.warning('Google Routes API failed, using straight-line ETA: %s', e)
+    except Exception as e:  # network down, bad key, quota, odd response: estimate instead, don't crash
+        logger.warning('Google Routes API failed, using distance estimate: %s', e)
         return None
     return seconds if len(seconds) == len(stops) - 1 else None
 
 
-def straight_line_leg_seconds(stops):
-    """Fallback leg times: straight-line distance at the average speed."""
-    return [_stop_km(a, b) / AVERAGE_BUS_SPEED_KMPH * 3600 for a, b in zip(stops, stops[1:])]
+def estimate_leg_seconds(stops, speed_kmh=AVERAGE_BUS_SPEED_KMH):
+    """Fallback when Google isn't available: straight-line distance at an average city bus speed."""
+    # Ignores road shape and traffic; Google's times replace this whenever a key works.
+    return [_stop_km(a, b) / speed_kmh * 3600 for a, b in zip(stops, stops[1:])] or None
 
 
-def stop_etas(bus_lat, bus_lng, stops, leg_seconds=None):
+def stop_etas(bus_lat, bus_lng, stops, leg_seconds):
     """Minutes until the bus reaches each stop, as {stop_id: minutes}. Passed stops get None.
 
-    `stops` must be in visiting order; `leg_seconds` are Google's times (None = fallback).
+    `stops` must be in visiting order; `leg_seconds` are Google's times (None = no ETAs; callers use estimate_leg_seconds first).
     Step 1: find which leg (stop A -> stop B) the bus is on. It's the leg where going
     A -> bus -> B adds the least extra distance over A -> B (a bus on the leg adds zero).
     Step 2: the share of that leg still to drive, times its time, gives the ETA to B.
     Step 3: each later stop adds its leg's time.
     The trip is assumed to begin at the first stop.
     """
-    if not stops:
+    if not leg_seconds:  # Google didn't answer at trip start
         return {}
     to_bus = [haversine_km(bus_lat, bus_lng, s.latitude, s.longitude) for s in stops]
-    if len(stops) == 1:
-        return {stops[0].id: round(to_bus[0] / AVERAGE_BUS_SPEED_KMPH * 60)}
-    legs = leg_seconds or straight_line_leg_seconds(stops)
+    legs = leg_seconds
 
     leg = min(range(len(stops) - 1),
               key=lambda i: to_bus[i] + to_bus[i + 1] - _stop_km(stops[i], stops[i + 1]))
